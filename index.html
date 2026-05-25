@@ -111,6 +111,10 @@
     </div>
 
     <script>
+        // ---------------- CONFIGURACIÓN FIREBASE ----------------
+        const dbUrl = "https://carro-f8554-default-rtdb.firebaseio.com/";
+        const apiKey = "AIzaSyDPf9ZKkIa66_Uw4hxE0KnZ9vWcxVlocvCo"; 
+
         // Inicialización del Gráfico de Chart.js
         const ctx = document.getElementById('energyChart').getContext('2d');
         const energyChart = new Chart(ctx, {
@@ -120,11 +124,11 @@
                 datasets: [{
                     label: 'Potencia Generada (mW)',
                     data: [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
-                    borderColor: '#f43f5e', // Color rose-500 de Tailwind
+                    borderColor: '#f43f5e', 
                     backgroundColor: 'rgba(244, 63, 94, 0.1)',
                     borderWidth: 2,
                     fill: true,
-                    tension: 0.4, // Curvatura suave de la línea
+                    tension: 0.4, 
                     pointBackgroundColor: '#f43f5e',
                     pointRadius: 4
                 }]
@@ -135,10 +139,11 @@
                 plugins: {
                     legend: { display: false }
                 },
+                animation: false, // Desactivar animación para lectura en vivo más fluida
                 scales: {
                     y: { 
                         beginAtZero: true, 
-                        suggestedMax: 100,
+                        suggestedMax: 50, // Ajusta este valor según la potencia máxima que alcance tu prototipo
                         grid: { borderDash: [5, 5], color: '#f1f5f9' }
                     },
                     x: {
@@ -148,85 +153,83 @@
             }
         });
 
-        // Simulación de datos (Esto se reemplazará por la conexión web real)
+        // --- Variables de Estado ---
         let totalSteps = 0;
+        let totalEnergy = 0; 
+        let timeElapsed = 0; 
+        let accumulatedEnergyHistory = []; 
+        let timeLabels = []; 
+        let staticChartInstance = null; 
         
-        // --- Variables nuevas para el seguimiento acumulado ---
-        let totalEnergy = 0; // Energía total acumulada
-        let timeElapsed = 0; // Segundos transcurridos
-        let accumulatedEnergyHistory = []; // Historial de energía para la gráfica estática
-        let timeLabels = []; // Etiquetas de tiempo para la gráfica estática
-        let staticChartInstance = null; // Instancia de la gráfica estática
-        // --------------------------------------------------------
+        let isStepping = false; // Bandera para detectar el instante exacto de la pisada
 
         function fetchSensorData() {
-            // Lógica de simulación para emular el comportamiento del sistema
-            // Se asume un pico de energía al dar el paso y una caída residual por el volante de inercia
-            const isStep = Math.random() > 0.8; 
-            
-            let voltage = 0;
-            let current = 0;
-            
-            if (isStep) {
-                voltage = (Math.random() * 3 + 2).toFixed(2); // Pico entre 2V y 5V
-                current = (Math.random() * 15 + 5).toFixed(2); // Pico entre 5mA y 20mA
-                totalSteps++;
-            } else {
-                // Inercia remanente
-                voltage = (Math.random() * 0.8).toFixed(2);
-                current = (Math.random() * 3).toFixed(2);
-            }
+            // Ajusta "energia.json" al nodo exacto donde tu ESP32 está escribiendo V e I
+            fetch(dbUrl + "energia.json?auth=" + apiKey + "&nocache=" + Date.now())
+            .then(res => res.json())
+            .then(data => {
+                if(!data) return;
 
-            // Cálculo matemático $P = V \times I$
-            const power = (voltage * current).toFixed(2); 
+                // Extraemos valores asegurando que sean numéricos. 
+                // Asegúrate de que las llaves "voltaje" y "corriente" coincidan con tu Firebase
+                const voltage = data.voltaje ? parseFloat(data.voltaje) : 0;
+                const current = data.corriente ? parseFloat(data.corriente) : 0;
 
-            // --- Lógica nueva: Acumulación de datos ---
-            totalEnergy += parseFloat(power); // Sumar la potencia al acumulado total (mWs)
-            timeElapsed++;
-            timeLabels.push(timeElapsed + 's');
-            accumulatedEnergyHistory.push(totalEnergy.toFixed(2));
-            // -------------------------------------------
+                // Lógica para contar pasos (Flanco de subida)
+                // Se cuenta 1 paso cuando el voltaje supera 1.0V (ajústalo a tu sensibilidad ideal)
+                if (voltage > 1.0 && !isStepping) {
+                    totalSteps++;
+                    isStepping = true;
+                } else if (voltage <= 1.0) {
+                    isStepping = false; // Se reinicia al bajar el voltaje
+                }
 
-            // Actualización del DOM (Interfaz)
-            document.getElementById('val-voltage').innerText = voltage + ' V';
-            document.getElementById('val-current').innerText = current + ' mA';
-            document.getElementById('val-power').innerText = power + ' mW';
-            document.getElementById('val-steps').innerText = totalSteps;
+                // Cálculo matemático P = V x I
+                const power = (voltage * current).toFixed(2); 
 
-            // Actualización de la gráfica
-            const dataArray = energyChart.data.datasets[0].data;
-            dataArray.push(parseFloat(power)); // Añadir el nuevo dato al final
-            dataArray.shift(); // Eliminar el dato más antiguo
-            energyChart.update();
+                // Acumulación de datos para el resumen
+                totalEnergy += parseFloat(power); 
+                timeElapsed++;
+                timeLabels.push(timeElapsed + 's');
+                accumulatedEnergyHistory.push(totalEnergy.toFixed(2));
+
+                // Actualización del DOM
+                document.getElementById('val-voltage').innerText = voltage.toFixed(2) + ' V';
+                document.getElementById('val-current').innerText = current.toFixed(2) + ' mA';
+                document.getElementById('val-power').innerText = power + ' mW';
+                document.getElementById('val-steps').innerText = totalSteps;
+
+                // Actualización de la gráfica en vivo
+                const dataArray = energyChart.data.datasets[0].data;
+                dataArray.push(parseFloat(power)); 
+                dataArray.shift(); 
+                energyChart.update();
+            })
+            .catch(err => console.error("Error consultando Firebase:", err));
         }
 
-        // --- Función nueva para mostrar el resumen total ---
+        // --- Función para mostrar el resumen total ---
         function showTotals() {
-            // Mostrar la sección oculta
             const totalsSection = document.getElementById('totals-section');
             totalsSection.classList.remove('hidden');
 
-            // Actualizar textos
             document.getElementById('total-steps-display').innerText = totalSteps;
             document.getElementById('total-energy-display').innerText = totalEnergy.toFixed(2) + ' mWs';
 
-            // Dibujar/Actualizar la gráfica estática
             const ctxStatic = document.getElementById('accumulatedEnergyChart').getContext('2d');
             
-            // Si ya existe una gráfica, destruirla para crear una nueva (manteniéndola estática hasta el próximo clic)
             if (staticChartInstance) {
                 staticChartInstance.destroy();
             }
 
-            // Crear la gráfica estática con los datos hasta el momento del clic
             staticChartInstance = new Chart(ctxStatic, {
                 type: 'line',
                 data: {
-                    labels: [...timeLabels], // Clonamos el array para que no se actualice solo
+                    labels: [...timeLabels], 
                     datasets: [{
                         label: 'Energía Total Acumulada (mWs)',
-                        data: [...accumulatedEnergyHistory], // Clonamos el array
-                        borderColor: '#fbbf24', // Color amber-400
+                        data: [...accumulatedEnergyHistory],
+                        borderColor: '#fbbf24', 
                         backgroundColor: 'rgba(251, 191, 36, 0.1)',
                         borderWidth: 2,
                         fill: true,
@@ -241,7 +244,7 @@
                     plugins: {
                         legend: { 
                             display: true,
-                            labels: { color: '#e2e8f0' } // Texto claro para fondo oscuro
+                            labels: { color: '#e2e8f0' } 
                         }
                     },
                     scales: {
@@ -252,19 +255,17 @@
                         },
                         x: {
                             grid: { display: false },
-                            ticks: { color: '#cbd5e1', maxTicksLimit: 15 } // Limitar etiquetas para que no se amontonen
+                            ticks: { color: '#cbd5e1', maxTicksLimit: 15 } 
                         }
                     }
                 }
             });
 
-            // Desplazar suavemente la vista hacia los totales
             totalsSection.scrollIntoView({ behavior: 'smooth' });
         }
-        // ---------------------------------------------------
 
-        // Ejecutar la lectura de datos cada segundo
-        setInterval(fetchSensorData, 1000);
+        // Bucle de lectura fijado en 500ms para captar rápido los cambios de voltaje
+        setInterval(fetchSensorData, 500);
     </script>
 </body>
 </html>
